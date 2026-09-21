@@ -1,0 +1,50 @@
+localhost
+.cn
+0.0.0.0
+127.0.0.1
+192.168.*
+163.com
+alibaba.com
+alicdn.com
+aliyun.com
+baidu.com
+bilivideo.com
+bilibili.com
+byted.org
+bytedance.com
+bytetcc.com
+csdn.net
+dftzj.com
+douban.com
+doubao.com
+douyin.com
+drop.ioiox.com
+eastmoney.com
+gc.com.cn
+gitee.com
+gtimg.cn
+hdslb.com
+jd.com
+jdcloud.com
+jianguoyun.com
+jlc.com
+nexusedgeio.com
+qq.com
+qianwen.com
+qianwenai.com
+qiniu.com
+qwen.ai
+snssdk.com
+szlcsc.com
+taobao.com
+tmall.com
+volceapplog.com
+volcengine.com
+weibo.com
+xueqiu.com
+zijieapi.com
+# 注意：这里**故意不**放 `::/0`（2026-09-14 起）。v6 目标不再一律直连，而是按规则表走
+# （不匹配本表/CN geo 的落到 MATCH,Proxy → 当前选中节点）。实测 9 个节点里只有 3 个 NL 节点
+# 能到 v6 目标，选到其余 v4-only 节点时 v6 目标会 5s 超时；要恢复「v6 一律直连」就把 `::/0`
+# 加回本文件末尾，再跑 converter + `PUT /providers/rules/direct`。别在这里写具体 IPv6 地址
+# （私人信息会随仓库与发布包扩散），需要放行单个 v6 目标时写 CIDR / 裸地址（converter 补 /128）。

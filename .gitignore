@@ -1,0 +1,30 @@
+# ---- build artifacts ----
+app/.zig-cache/
+app/zig-out/
+*.exe
+
+# ---- local toolchain & vendored bindings (re-fetchable, huge) ----
+.tools/
+app/zig-pkg/
+
+# ---- distributable bundles / runtime leftovers ----
+release/
+*.log
+cache.db
+geoip.metadb
+
+# user-specific proxy config (private: 节点凭据 / 控制器地址均不进仓库)
+mihomo_client.yaml
+mihomo_client.yaml.bak-*
+app/cfg/config.yaml
+app/cfg/config.yaml.bak-*
+app/cfg/config.min.yaml
+app/cfg/direct.yaml
+app/cfg/GeoIP.dat
+app/cfg/GeoSite.dat
+app/cfg/Country.mmdb
+app/cfg/ASN.mmdb
+app/cfg/BundleMRS.7z
+
+# agent tooling
+.reasonix/

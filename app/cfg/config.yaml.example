@@ -1,0 +1,169 @@
+# ============================================================
+# config.yaml.example — mihomo 主配置脱敏模板（不含真实节点地址/密钥）
+# ------------------------------------------------------------
+# 用法：复制为 config.yaml，把最后一段 proxies 的 server / username / password
+#      换成你的真实节点（新增节点只写进 proxies 段即可——两个组都开了 include-all，
+#      会自动收录全部静态节点，不再需要在 proxy-groups 里维护第二份成员名单）。
+# 结构：全局设置 → dns → tun → proxy-groups → rules → geo → proxies（节点在最末尾）。
+# 为什么节点用静态声明而不是 proxy-providers：只有静态 proxies 会注册进控制器的 proxy
+#   表，控件 Test All Latency 才能逐个即时测速（provider 里的节点不注册，
+#   GET /proxies/{name}/delay 返 404，只能等 provider health-check 的周期结果）。
+# 节点名约定：只用 ASCII、不含空格/竖线/emoji——控件把名字原样拼进 REST 路径且未做
+#   percent-encode；单池别超过 40 个（控件菜单上限 MAX_NODES=40）。
+# 本模板保留「lite geo + whitelist 直连」功能：
+#   - geox-url 指向 meta-rules-dat 的 lite 版 GeoIP/GeoSite（体积小）
+#   - rule-providers.direct 读取 direct.yaml（由 scripts\whitelist 转换而来），
+#     并在 rules 首位用 RULE-SET,direct,DIRECT 强制白名单域名直连（IPv6 目标不在此列：
+#     2026-09-14 起不再放 ::/0，v6 目标按规则表走，见项目 AGENTS.md 关键决策）
+# 放置目录：与 config.yaml 同处 app\cfg（开发版）或 <exe>\mihomo\（发布包，与 mihomo.exe
+#   / direct.yaml / geodata 同目录）——控件启动核心时把 -d（home）设为配置文件所在目录，
+#   所以 direct.yaml / GeoIP.dat / GeoSite.dat 必须和 config.yaml 放在一起。
+# ============================================================
+
+# General Settings
+mixed-port: 10809 # HTTP(S) & SOCKS5 mixed port
+allow-lan: true # Allow LAN connections
+bind-address: "*" # Bind to all interfaces
+mode: rule # Rule-based routing
+log-level: info # Log level
+ipv6: true # Enable IPv6
+external-controller: 0.0.0.0:9090 # API Port
+secret: "" # API Secret (Optional)
+
+# DNS Settings (Essential for preventing leaks)
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver: [223.5.5.5, 114.114.114.114]
+  nameserver: [https://dns.alidns.com/dns-query, https://doh.pub/dns-query]
+  fallback: [https://1.1.1.1/dns-query, https://8.8.8.8/dns-query, 8.8.8.8, 1.1.1.1]
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr: [240.0.0.0/4]
+
+# TUN Mode（虚拟网卡 + 全流量接管；stack=mixed 比默认 gVisor 更接近系统栈，首连更快）
+#
+# 【模板默认 false 是故意的】包里的节点是占位符（1.2.3.4）：TUN 一开就等于"全机流量交给
+# 一个连不上的节点" → 整机黑洞。所以：
+#   1) 先把下面 proxies 换成真实节点，启动控件确认能正常上网；
+#   2) 想让 TUN 开机就开，把这里的 `enable` 改成 `true` —— **这是唯一的开机开关**
+#      （控件不记 TUN 偏好，也没有第二份配置；`mihomo-widget.conf` 里不再有 `tun` 键）。
+#   3) 控件菜单里的 "TUN Mode" 只作用于本次运行（`PATCH /configs`），重启控件/核心后
+#      仍以本文件为准。
+# 为什么强调"启动时就带 TUN"：核心在 `updateTun` 阶段建网卡，早于它自己的首拨/组测速
+#   （`OnRunning`），是**结构性安全**的；而"运行中开 TUN"（菜单里切换、或脚本 PATCH）
+#   会把那一刻正在建立的 hysteria2（QUIC/UDP）连接绑到 TUN 的地址上 → 报文自环 → 该节点
+#   约 1 分钟不可达（实测：TCP 节点不受影响，只有 hy 会卡）。控件对这种情况有一层自愈：
+#   TUN 就位后约 10 秒探测，发现"QUIC 类节点探不通而 TCP 类正常"就就地重载一次核心
+#   （重建全部 outbound，hy 重拨），把等待从 ~1 分钟压到十几秒。
+tun:
+  enable: false
+  stack: mixed
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack: [any:53]
+
+# ---------------------------------------------------
+# PROXY GROUPS
+# ---------------------------------------------------
+proxy-groups:
+  # Manual Selection Group（= 控件菜单读的第一个 select 组）
+  # include-all（Meta 扩展，随包核心 v1.19.30 实测）：自动收录全部静态节点；
+  # 显式 proxies 仍生效且排在前部（子组/策略在前，节点自动追加在后）。
+  - name: Proxy
+    type: select
+    include-all: true
+    proxies: [Auto-Select]
+
+  # Auto Latency Test Group
+  # 自动测速池同样全量收录（≤40 个节点时 interval 周期压力可忽略）；无新增节点需维护。
+  - name: Auto-Select
+    type: url-test
+    url: "http://www.gstatic.com/generate_204"
+    interval: 120
+    tolerance: 50
+    include-all: true
+
+# ---------------------------------------------------
+# RULES
+# ---------------------------------------------------
+rule-providers:
+  direct:
+    type: file
+    behavior: classical
+    path: ./direct.yaml
+    interval: 86400
+rules:
+  - RULE-SET,direct,DIRECT
+  - GEOSITE,CN,DIRECT
+  - GEOIP,CN,DIRECT
+  - GEOIP,LAN,DIRECT
+  - MATCH,Proxy
+geodata-mode: true
+geodata-loader: memconservative
+geo-auto-update: true
+geo-update-interval: 24
+geox-url:
+  geoip: https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip-lite.dat
+  geosite: https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite-lite.dat
+
+# ---------------------------------------------------
+# PROXIES — 节点列表（脱敏占位，请替换成真实值）
+# ---------------------------------------------------
+proxies:
+  - &mieru
+    name: "Mieru-sj"
+    type: mieru
+    server: 1.2.3.4
+    port: 2999
+    transport: TCP
+    username: your_username
+    password: change_me
+    multiplexing: MULTIPLEXING_HIGH
+    handshake-mode: HANDSHAKE_NO_WAIT
+
+  - { name: "Mieru-nl", server: 5.6.7.8, <<: *mieru }
+  - { name: "Mieru-hk", server: 9.10.11.12, <<: *mieru }
+
+  - &anytls
+    name: "AnyTLS-sj"
+    type: anytls
+    server: 1.2.3.4
+    port: 2998
+    password: "change_me"
+    client-fingerprint: chrome
+    udp: true
+    # sni: "example.com"     # Optional: Custom SNI
+    # 自签证书请改用 pinning（比 skip-cert-verify 安全，能挡住中间人拿密码）：
+    #   fingerprint: "AA:BB:..."   # 服务端 openssl x509 -noout -fingerprint -sha256 -in server.crt
+    # 注意 certificate/private-key 是 mTLS 的客户端证书，不是"信任服务端证书"的开关。
+    # 若一时拿不到指纹，保留 skip-cert-verify: true 也能连（客户端不做任何证书校验）。
+    skip-cert-verify: true
+    smux:
+      enabled: true
+
+  - { name: "AnyTLS-nl", server: 5.6.7.8, <<: *anytls }
+  - { name: "AnyTLS-hk", server: 9.10.11.12, <<: *anytls }
+
+  - &hysteria2
+    name: "hy-sj"
+    type: hysteria2
+    server: 1.2.3.4
+    port: 3001
+    # ports: 3001-3011
+    # hop-interval: 30
+    password: change_me
+    up: "30 Mbps"
+    down: "200 Mbps"
+    # sni: server.com
+    # 自签证书请改用 pinning（hysteria2 的密码在握手内，skip-cert-verify 时中间人可截获）：
+    #   fingerprint: "AA:BB:..."   # 服务端 openssl x509 -noout -fingerprint -sha256 -in server.crt
+    skip-cert-verify: true
+    alpn:
+      - h3
+
+  - { name: "hy-nl", server: 5.6.7.8, <<: *hysteria2 }
+  - { name: "hy-hk", server: 9.10.11.12, <<: *hysteria2 }

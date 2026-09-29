@@ -37,6 +37,7 @@ const WM_DISPLAYCHANGE: u32 = 0x007E; // 分辨率/显示器变更：Z-order 会
 const GWL_EXSTYLE: i32 = -20;
 const HWND_TOPMOST: win.HWND = -1;
 const HWND_NOTOPMOST: win.HWND = -2;
+const HWND_BOTTOM: win.HWND = 1;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
@@ -1221,15 +1222,18 @@ fn wndproc(hwnd: win.HWND, msg: u32, wp: win.WPARAM, lp: win.LPARAM) callconv(.c
                 }
             }
             if (g_cfg.autohide_fullscreen and !g_menu_open and fgFullscreen()) {
-                // 全屏期间：降到普通层（不隐藏），游戏窗口自然盖住控件；停 topmost
-                // 巡检（否则 guard 会把窗口修回 topmost 带与游戏争）。重绘照常——
-                // 被遮挡时 DWM 不用它，成本低；恢复 topmost 后画面立即是新的。
+                // 全屏期间：降到普通带底部（不隐藏），游戏窗口必然盖住控件；停 topmost
+                // 巡检（否则 guard 会把窗口修回 topmost 带与游戏争）。悬停检测与重绘
+                // 照常跑：被盖住时都是廉价 no-op，恢复后画面立即是新的。只降一次，
+                // 但 Z 序每 tick 都压底一次——游戏切换/重建窗口时会插到控件前面。
                 if (!g_fullscreen_demoted) {
                     g_fullscreen_demoted = true;
-                    if (isTopmostWindow(hwnd)) {
-                        _ = win.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                        logWrite("autohide: fullscreen foreground, demoted to normal band", .{});
-                    }
+                    logWrite("autohide: fullscreen foreground, yielding to fullscreen app", .{});
+                }
+                _ = win.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                if (isTopmostWindow(hwnd)) {
+                    // 首次降级或 guard 残留：清掉 topmost 位（SetWindowPos 到 BOTTOM 不清位）。
+                    _ = win.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
                 }
             } else {
                 if (g_fullscreen_demoted) {

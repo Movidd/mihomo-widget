@@ -109,6 +109,7 @@ pub extern "user32" fn GetForegroundWindow() HWND;
 pub extern "user32" fn IsIconic(hwnd: HWND) BOOL;
 pub extern "user32" fn GetSystemMetrics(index: i32) i32;
 pub extern "user32" fn GetWindowLongPtrW(hwnd: HWND, idx: i32) isize;
+pub extern "user32" fn GetClassNameW(hwnd: HWND, buf: [*]u16, max: i32) i32;
 pub extern "user32" fn WindowFromPoint(pt: POINT) HWND;
 pub extern "user32" fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) BOOL;
 pub extern "user32" fn CheckMenuItem(menu: HMENU, id: usize, flags: u32) BOOL;

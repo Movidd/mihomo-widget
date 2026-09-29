@@ -36,6 +36,7 @@ const WM_NCLBUTTONDOWN: u32 = 0x00A1;
 const WM_DISPLAYCHANGE: u32 = 0x007E; // 分辨率/显示器变更：Z-order 会被重建
 const GWL_EXSTYLE: i32 = -20;
 const HWND_TOPMOST: win.HWND = -1;
+const HWND_NOTOPMOST: win.HWND = -2;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
@@ -907,7 +908,7 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
     menuAdd(menu, MF_STRING | (if (tun_on) MF_CHECKED else 0) | core_flag, FUNC_TUN, if (tun_on) "TUN Mode (on)" else "TUN Mode (off)");
     const as_on = system_win.autoStartEnabled();
     menuAdd(menu, MF_STRING | (if (as_on) MF_CHECKED else 0), FUNC_AUTOSTART, if (as_on) "Auto Start (on)" else "Auto Start (off)");
-    menuAdd(menu, MF_STRING | (if (g_cfg.autohide_fullscreen) MF_CHECKED else 0), FUNC_AUTOHIDE, if (g_cfg.autohide_fullscreen) "Auto Hide in Fullscreen (on)" else "Auto Hide in Fullscreen (off)");
+    menuAdd(menu, MF_STRING | (if (g_cfg.autohide_fullscreen) MF_CHECKED else 0), FUNC_AUTOHIDE, if (g_cfg.autohide_fullscreen) "Yield to Fullscreen (on)" else "Yield to Fullscreen (off)");
 
     // Network Interface selection submenu: pick which NIC to meter.
     var nic_sel: [MAX_NICS]traffic_mod.Nic = undefined;
@@ -988,12 +989,12 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
         },
         FUNC_AUTOHIDE => {
             g_cfg.autohide_fullscreen = !g_cfg.autohide_fullscreen;
-            if (!g_cfg.autohide_fullscreen and g_autohide_hidden) {
-                // 关掉开关的瞬间若正藏着，立即恢复，避免控件"消失到下次全屏"。
-                g_autohide_hidden = false;
-                _ = win.ShowWindow(hwnd, SW_SHOWNA);
+            if (!g_cfg.autohide_fullscreen and g_fullscreen_demoted) {
+                // 关掉开关的瞬间若正降级中，立即升回 topmost，避免控件一直被盖住。
+                g_fullscreen_demoted = false;
+                _ = win.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
-            flashMsg(if (g_cfg.autohide_fullscreen) "Auto hide on" else "Auto hide off");
+            flashMsg(if (g_cfg.autohide_fullscreen) "Yield to fullscreen on" else "Yield to fullscreen off");
             logWrite("autohide toggled -> {}", .{g_cfg.autohide_fullscreen});
             _ = win.InvalidateRect(hwnd, null, 0);
         },
@@ -1035,10 +1036,12 @@ var g_top_check_at: u64 = 0; // 上次巡检时刻（自带限流）
 var g_top_fixes: u32 = 0; // 已修复次数
 
 // ---------------- fullscreen auto-hide ----------------
-// 前台是全屏应用（游戏 / 演示）时把窗口 SW_HIDE 掉并暂停重绘与巡检，避免
-// DWM 合成路径被常驻 layered 窗口干扰（实测表现为全屏游戏卡顿）。退出全屏后
-// SW_SHOWNA 原位恢复，不抢焦点。菜单打开期间绝不隐藏（会与 TrackPopupMenu 竞争）。
-var g_autohide_hidden: bool = false; // 当前处于"因全屏而隐藏"状态
+// 前台是全屏应用（游戏 / 演示）时把控件从 topmost 带降到普通层（不隐藏）：
+// 全屏窗口会自然把它盖住，DWM 把它当作被遮挡窗口处理，不再干扰合成路径。
+// 退出全屏静默升回 topmost（SWP_NOACTIVATE 不抢焦点）。菜单打开期间不降级
+// （会与 TrackPopupMenu 竞争）。注意创建窗口给过 WS_EX_TOPMOST，而 topmostGuard
+// 只负责"丢了就修回"，两者不冲突：降级是本功能主动清位，恢复是重新置位。
+var g_fullscreen_demoted: bool = false; // 当前处于"因全屏而降到普通层"状态
 var g_menu_open: bool = false; // TrackPopupMenu 进行中（menuForGroup 置位）
 
 /// 前台窗口矩形覆盖整个主屏才算全屏（四边盖过屏幕边缘，8px 容差）。最小化不算。
@@ -1052,6 +1055,15 @@ fn fgFullscreen() bool {
     const fg = win.GetForegroundWindow();
     if (fg == 0) return false;
     if (win.IsIconic(fg) != 0) return false; // 最小化不算
+    // 点桌面 / 无窗口聚焦时前台是 shell 桌面窗口本身（Progman / WorkerW），
+    // 矩形正好铺满整屏——不排除的话"回到桌面"就会被当成全屏把控件藏掉。
+    var cls: [16]u16 = undefined;
+    const n = win.GetClassNameW(fg, &cls, cls.len);
+    if (n > 0) {
+        const name = cls[0..@intCast(n)];
+        if (std.mem.eql(u16, name, std.unicode.utf8ToUtf16LeStringLiteral("Progman")) or
+            std.mem.eql(u16, name, std.unicode.utf8ToUtf16LeStringLiteral("WorkerW"))) return false;
+    }
     var rc: win.RECT = undefined;
     if (win.GetWindowRect(fg, &rc) == 0) return false;
     const sw = win.GetSystemMetrics(SM_CXSCREEN);
@@ -1209,23 +1221,26 @@ fn wndproc(hwnd: win.HWND, msg: u32, wp: win.WPARAM, lp: win.LPARAM) callconv(.c
                 }
             }
             if (g_cfg.autohide_fullscreen and !g_menu_open and fgFullscreen()) {
-                // 全屏期间：隐藏 + 停重绘/巡检/悬停。POLL_TIMER 继续走（每秒一次的
-                // shell 查询成本可忽略），网速采样保持新鲜，恢复时立即显示准确值。
-                if (!g_autohide_hidden) {
-                    g_autohide_hidden = true;
-                    _ = win.ShowWindow(hwnd, SW_HIDE);
-                    logWrite("autohide: fullscreen foreground, widget hidden", .{});
+                // 全屏期间：降到普通层（不隐藏），游戏窗口自然盖住控件；停 topmost
+                // 巡检（否则 guard 会把窗口修回 topmost 带与游戏争）。重绘照常——
+                // 被遮挡时 DWM 不用它，成本低；恢复 topmost 后画面立即是新的。
+                if (!g_fullscreen_demoted) {
+                    g_fullscreen_demoted = true;
+                    if (isTopmostWindow(hwnd)) {
+                        _ = win.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                        logWrite("autohide: fullscreen foreground, demoted to normal band", .{});
+                    }
                 }
-                return 0;
+            } else {
+                if (g_fullscreen_demoted) {
+                    g_fullscreen_demoted = false;
+                    _ = win.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    logWrite("autohide: fullscreen ended, back to topmost band", .{});
+                }
+                hoverCheck(hwnd);
+                if (!g_fullscreen_demoted) topmostGuard(hwnd);
+                _ = win.InvalidateRect(hwnd, null, 0);
             }
-            if (g_autohide_hidden) {
-                g_autohide_hidden = false;
-                _ = win.ShowWindow(hwnd, SW_SHOWNA); // 原位恢复，不抢焦点
-                logWrite("autohide: fullscreen ended, widget restored", .{});
-            }
-            hoverCheck(hwnd);
-            topmostGuard(hwnd);
-            _ = win.InvalidateRect(hwnd, null, 0);
             return 0;
         },
         WM_DISPLAYCHANGE => {

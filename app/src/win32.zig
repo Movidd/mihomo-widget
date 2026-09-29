@@ -105,6 +105,9 @@ pub extern "user32" fn TrackPopupMenu(menu: HMENU, flags: u32, x: i32, y: i32, r
 pub extern "user32" fn DestroyMenu(menu: HMENU) BOOL;
 pub extern "user32" fn ClientToScreen(hwnd: HWND, pt: *POINT) BOOL;
 pub extern "user32" fn SetForegroundWindow(hwnd: HWND) BOOL;
+pub extern "user32" fn GetForegroundWindow() HWND;
+pub extern "user32" fn IsIconic(hwnd: HWND) BOOL;
+pub extern "user32" fn GetSystemMetrics(index: i32) i32;
 pub extern "user32" fn GetWindowLongPtrW(hwnd: HWND, idx: i32) isize;
 pub extern "user32" fn WindowFromPoint(pt: POINT) HWND;
 pub extern "user32" fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) BOOL;
@@ -188,3 +191,7 @@ pub const TRACKMOUSEEVENT = extern struct {
     hwndTrack: HWND,
     dwHoverTime: u32,
 };
+
+// ---------------- fullscreen detection ----------------
+// （主屏矩形判定在 main.zig 的 fgFullscreen()；user32 externs 见上）
+

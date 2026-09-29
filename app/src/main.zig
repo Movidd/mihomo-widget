@@ -21,6 +21,10 @@ const WS_EX_TOPMOST: u32 = 0x0000_0008;
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 const LWA_ALPHA: u32 = 0x0000_0002;
 const SW_SHOW: i32 = 5;
+const SW_HIDE: i32 = 0;
+const SW_SHOWNA: i32 = 8;
+const SM_CXSCREEN: i32 = 0;
+const SM_CYSCREEN: i32 = 1;
 const WM_PAINT: u32 = 0x000F;
 const WM_TIMER: u32 = 0x0113;
 const WM_DESTROY: u32 = 0x0002;
@@ -146,6 +150,7 @@ const Config = struct {
     speed_unit_auto: bool = true, // true=按量级自动选 KB/MB/GB；false=固定 MB/s
     nic_ifindex: u32 = 0, // 0=自动（全部物理网卡求和）；否则只统计该接口
     topmost_guard_ms: u32 = 5000, // 置顶巡检间隔（ms）；0=关闭
+    autohide_fullscreen: bool = true, // 前台全屏（游戏/演示）时自动隐藏控件并暂停重绘
     c_bg: u32 = rgb(0x14, 0x16, 0x1c),
     c_speed: u32 = rgb(0xcb, 0xf7, 0xcc),
     c_fg: u32 = rgb(0xdd, 0xdd, 0xdd),
@@ -224,6 +229,8 @@ const Config = struct {
                 // 显式写 0 表示关闭巡检；其余值限定在 1s..60s 之间。
                 const v = std.fmt.parseInt(u32, val, 10) catch self.topmost_guard_ms;
                 self.topmost_guard_ms = if (v == 0) 0 else std.math.clamp(v, 1000, 60000);
+            } else if (std.mem.eql(u8, key, "autohide_fullscreen")) {
+                self.autohide_fullscreen = (std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "on"));
             } else if (std.mem.eql(u8, key, "sysproxy")) {
                 self.sysproxy = (std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "on"));
             }
@@ -311,8 +318,9 @@ const FUNC_UPDATE_CORE: usize = FUNC_BASE + 3; // 原 "Exit (keep core)" 槽位
 const FUNC_EXIT_STOP: usize = FUNC_BASE + 4;
 const FUNC_AUTOSTART: usize = FUNC_BASE + 5;
 const FUNC_UPDATE_GEO: usize = FUNC_BASE + 6;
+const FUNC_AUTOHIDE: usize = FUNC_BASE + 7; // 全屏自动隐藏开关（仅本次运行，不落盘）
 
-// 网卡选择子菜单命令 ID 基址（避开节点项 1..MAX_NODES 与功能项 FUNC_BASE..+6）。
+// 网卡选择子菜单命令 ID 基址（避开节点项 1..MAX_NODES 与功能项 FUNC_BASE..+7）。
 const NIC_BASE_ID: usize = 1000;
 const MAX_NICS: usize = traffic_mod.MAX_NICS;
 
@@ -899,6 +907,7 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
     menuAdd(menu, MF_STRING | (if (tun_on) MF_CHECKED else 0) | core_flag, FUNC_TUN, if (tun_on) "TUN Mode (on)" else "TUN Mode (off)");
     const as_on = system_win.autoStartEnabled();
     menuAdd(menu, MF_STRING | (if (as_on) MF_CHECKED else 0), FUNC_AUTOSTART, if (as_on) "Auto Start (on)" else "Auto Start (off)");
+    menuAdd(menu, MF_STRING | (if (g_cfg.autohide_fullscreen) MF_CHECKED else 0), FUNC_AUTOHIDE, if (g_cfg.autohide_fullscreen) "Auto Hide in Fullscreen (on)" else "Auto Hide in Fullscreen (off)");
 
     // Network Interface selection submenu: pick which NIC to meter.
     var nic_sel: [MAX_NICS]traffic_mod.Nic = undefined;
@@ -922,6 +931,8 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
     var sc = at;
     _ = win.ClientToScreen(hwnd, &sc);
     _ = win.SetForegroundWindow(hwnd);
+    g_menu_open = true; // 菜单打开期间暂停全屏自动隐藏（防止 TrackPopupMenu 中途窗口被 SW_HIDE）
+    defer g_menu_open = false;
     const raw: win.BOOL = win.TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD, sc.x, sc.y, 0, hwnd, null);
     if (raw <= 0) return;
     const cmd: usize = @intCast(raw);
@@ -975,6 +986,17 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
             enqueueJob(.update_geo);
             flashMsg("Updating Geo data…");
         },
+        FUNC_AUTOHIDE => {
+            g_cfg.autohide_fullscreen = !g_cfg.autohide_fullscreen;
+            if (!g_cfg.autohide_fullscreen and g_autohide_hidden) {
+                // 关掉开关的瞬间若正藏着，立即恢复，避免控件"消失到下次全屏"。
+                g_autohide_hidden = false;
+                _ = win.ShowWindow(hwnd, SW_SHOWNA);
+            }
+            flashMsg(if (g_cfg.autohide_fullscreen) "Auto hide on" else "Auto hide off");
+            logWrite("autohide toggled -> {}", .{g_cfg.autohide_fullscreen});
+            _ = win.InvalidateRect(hwnd, null, 0);
+        },
         FUNC_EXIT_STOP => {
             enqueueJob(.stop);
             flashMsg("Stopping core…");
@@ -1011,6 +1033,37 @@ fn hoverCheck(hwnd: win.HWND) void {
 // 检测后果并静默修复，同时记日志，便于下次发生时定位。
 var g_top_check_at: u64 = 0; // 上次巡检时刻（自带限流）
 var g_top_fixes: u32 = 0; // 已修复次数
+
+// ---------------- fullscreen auto-hide ----------------
+// 前台是全屏应用（游戏 / 演示）时把窗口 SW_HIDE 掉并暂停重绘与巡检，避免
+// DWM 合成路径被常驻 layered 窗口干扰（实测表现为全屏游戏卡顿）。退出全屏后
+// SW_SHOWNA 原位恢复，不抢焦点。菜单打开期间绝不隐藏（会与 TrackPopupMenu 竞争）。
+var g_autohide_hidden: bool = false; // 当前处于"因全屏而隐藏"状态
+var g_menu_open: bool = false; // TrackPopupMenu 进行中（menuForGroup 置位）
+
+/// 前台窗口矩形覆盖整个主屏才算全屏（四边盖过屏幕边缘，8px 容差）。最小化不算。
+/// 不用 SHQueryUserNotificationState：实测（2026-09-30）zen 浏览器仅最大化
+/// （3872x2072，高比屏幕小 120px）就让它持续返回 QUNS_BUSY，桌面上控件被无限
+/// 隐藏。窗口矩形是真凭实据，shell 状态是猜测。
+/// 已知边界：Chrome 系最大化 rect = -16,-16 ~ sw+16, sh+16 —— 四边各超出 16px、
+/// 高度仍差 120px（任务栏），不会命中本判定（实测验证）。真正的 F11 全屏 rect
+/// 覆盖整屏（实测 -16,-16 ~ 3856,2176），会命中。
+fn fgFullscreen() bool {
+    const fg = win.GetForegroundWindow();
+    if (fg == 0) return false;
+    if (win.IsIconic(fg) != 0) return false; // 最小化不算
+    var rc: win.RECT = undefined;
+    if (win.GetWindowRect(fg, &rc) == 0) return false;
+    const sw = win.GetSystemMetrics(SM_CXSCREEN);
+    const sh = win.GetSystemMetrics(SM_CYSCREEN);
+    if (sw == 0 or sh == 0) return false;
+    const tol: i32 = 8;
+    // 全屏应用习惯把窗口四边各外扩一个边框宽度（Chrome 系 16px），
+    // rect = -16,-16 ~ sw+16, sh+16；要求四边都盖过屏幕边缘（向外 8px 容差）。
+    return rc.left <= tol and rc.top <= tol and
+        rc.right >= sw - tol and rc.bottom >= sh - tol and
+        (rc.right - rc.left) >= sw - tol and (rc.bottom - rc.top) >= sh - tol;
+}
 
 fn isTopmostWindow(hwnd: win.HWND) bool {
     const ex: u64 = @bitCast(win.GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
@@ -1154,6 +1207,21 @@ fn wndproc(hwnd: win.HWND, msg: u32, wp: win.WPARAM, lp: win.LPARAM) callconv(.c
                     logWrite("poll #{d} online={} status={s} nodes={d} mem={d}/{d}MB", .{ g_log_tick, st.online, st.status.slice(), st.nodes_n, ms.ws / (1 << 20), ms.priv / (1 << 20) });
                     g_log_tick += 1;
                 }
+            }
+            if (g_cfg.autohide_fullscreen and !g_menu_open and fgFullscreen()) {
+                // 全屏期间：隐藏 + 停重绘/巡检/悬停。POLL_TIMER 继续走（每秒一次的
+                // shell 查询成本可忽略），网速采样保持新鲜，恢复时立即显示准确值。
+                if (!g_autohide_hidden) {
+                    g_autohide_hidden = true;
+                    _ = win.ShowWindow(hwnd, SW_HIDE);
+                    logWrite("autohide: fullscreen foreground, widget hidden", .{});
+                }
+                return 0;
+            }
+            if (g_autohide_hidden) {
+                g_autohide_hidden = false;
+                _ = win.ShowWindow(hwnd, SW_SHOWNA); // 原位恢复，不抢焦点
+                logWrite("autohide: fullscreen ended, widget restored", .{});
             }
             hoverCheck(hwnd);
             topmostGuard(hwnd);

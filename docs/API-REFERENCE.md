@@ -14,11 +14,11 @@
 | --- | --- | --- |
 | `Config`（`struct`）+ `pub fn load(exe_dir)` | ~146–252 | 解析 `mihomo-widget.conf`；字段见 §3 |
 | `g_cfg` / `g_state` / `g_ui` / `g_poll` / `g_poll_lock` / `g_meter` / `g_job` / `g_busy` / `g_quitting` / `g_worker_thread` / `g_job_ev` / `g_core_spawned` / `g_core_pid` | 全局单例 | 配置 / 运行状态 / UI 缓存 / 后台轮询槽 + 锁 / 网卡计量 / 任务盒 + 忙标志 / 退出标志 / worker 句柄 / 事件 / 核心启动+pid |
-| `workerTun()` / `workerTunSet(want)` | ~513/527 | 切换 TUN / 强制目标状态；返回 `0=enabled,1=disabled,2=needs admin,3=failed` |
-| `enqueueJob(kind)` | ~457 | 提交后台任务（`JobKind` 全集：`latency/tun/stop/update_core/update_geo/heal`）；已在跑则忽略 |
-| `handleJobDone(kind, result)` | ~798 | 任务收尾：提示 / 关窗 |
-| `flashMsg(text)` | ~329 | 底部短暂提示（5 个 tick） |
-| `main()` | ~1217 | 入口：DPI → 定位 yaml → parse api_info → 建窗 → worker → 消息循环 |
+| `workerTun()` / `workerTunSet(want)` | ~521/535 | 切换 TUN / 强制目标状态；返回 `0=enabled,1=disabled,2=needs admin,3=failed` |
+| `enqueueJob(kind)` | ~465 | 提交后台任务（`JobKind` 全集：`latency/tun/stop/update_core/update_geo/heal`）；已在跑则忽略 |
+| `handleJobDone(kind, result)` | ~806 | 任务收尾：提示 / 关窗 |
+| `flashMsg(text)` | ~337 | 底部短暂提示（5 个 tick） |
+| `main()` | ~1285 | 入口：DPI → 定位 yaml → parse api_info → 建窗 → worker → 消息循环 |
 
 #### main.zig 内部可改锚点（Agent 高频改动点）
 > 只列**确切符号名** + 归属区域，行号近似、会漂移——改前用 grep 按符号名复核当前行。
@@ -38,6 +38,7 @@
 | 调度/工具 | `clientFor(arena)` / `flashMsg(text)` / `readTunLive()`（`TunLive{enable, has_device}`）/ `tunEffectivelyOn()` / `waitTun(want, budget_ms)` | 构造 client / 底部提示 / 读 live `tun`（开关 + 网卡是否建好）/ TUN 是否真可用（菜单标题与切换判断都用它）/ 轮询等目标状态。TUN 入口一律走 `enqueueJob(.tun)` |
 | 日志/内存 | `logWrite(fmt, args)` / `memStat()`（`MemStat{ws, priv}`） | 写 `mihomo-widget.log` / 进程内存（psapi；`ws`=working_set，`priv`=pagefile_usage=私有提交） |
 | 置顶守护 | `isTopmostWindow(hwnd)` / `reassertTopmost(hwnd, reason, cover)` / `topmostGuard(hwnd)` | Windows 在解锁 / 显示变更 / DWM 重建 Z-order 后会把窗口挤出 topmost 带；按 `topmost_guard_ms` 巡检并用 `SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE)` 静默修回 + 记日志。`wndproc` 的 `WM_DISPLAYCHANGE` 立即修一次 |
+| 全屏自动隐藏 | `fgFullscreen()` / `g_autohide_hidden` / `g_menu_open` / conf `autohide_fullscreen` | `POLL_TIMER` 里判前台窗口矩形是否覆盖整个主屏（`GetForegroundWindow` + `GetWindowRect` + `GetSystemMetrics`，8px 容差，最小化不算；**不要改用 shell 的用户通知状态 API**，见 §5）→ 覆盖则 `SW_HIDE` + 跳过重绘/巡检/悬停；退出全屏 `SW_SHOWNA` 原位恢复。`g_menu_open`（`menuForGroup` 置位）期间不隐藏，防止菜单中途被藏 |
 | 网速文本 | `fmtRate(buf, bytes_per_s, auto)` | 单位换算 + 换挡（规则见 §3 `speed_unit_auto`） |
 | QUIC 自环自愈 | `workerHeal(nodes, quic, nn)` / `nodeIsQuic(quic_names, name)` / `g_heal_armed_at` / `g_heal_tun_prev` / `HEAL_DELAY_MS` / `HEAL_PROBE_MS` / `nodes_quic` / `tun_on` | TUN 每次"就位"（off→on，或核心刚起来就带 TUN）后布防、`HEAL_DELAY_MS` 到点探一次：QUIC 类节点（`/proxies` 的 `type`，见 `isQuicType`）有探不通、而 TCP 类至少一个通 = 自环 → `PUT /configs {}` 就地重载（重建 outbound → 重拨）+ 复查 + 按需重选节点。**前置条件**：核心那份配置的 `tun.enable` 必须已等于实时状态（`proc.patchTunEnable` 比对，不一致就跳过），否则重载会按文件把隧道刷掉；事后仍 `waitTun` 复查、丢了就 `workerTunSet` 补回。每次 TUN 就位只做一次 |
 
@@ -144,6 +145,7 @@
 | `window_x` / `window_y` | i32 | — | 上次窗口位置（physical px） |
 | `color_bg` / `color_speed` / `color_text` / `color_dim` / `color_warn` | hex | 见 `Config` | 配色 |
 | `sysproxy` | 0/1 | 0 | 上次系统代理状态 |
+| `autohide_fullscreen` | 0/1 | 1 | 前台窗口矩形覆盖整个主屏（全屏游戏 / 演示）时自动 `SW_HIDE` 控件并暂停重绘/巡检，退出全屏 `SW_SHOWNA` 原位恢复；0=关闭。解决常驻 layered 窗口干扰全屏 DWM 合成导致的游戏卡顿（检测细节与 QUNS 误报坑见 §5） |
 
 > **没有 `tun` 键**（2026-09-18 起，别再找）：TUN 的开机状态只有一个来源——`config.yaml` 的
 > `tun.enable`，核心启动时自己读（那条路径天然安全，见 AGENTS.md 关键决策）。菜单里的
@@ -178,5 +180,6 @@
 - **`main()` 解析主配置的 arena 必须活过 `g_state` 拷贝**：`config.parseMihomoYaml` 返回的 `host` / `secret` 是 arena 切片，曾把 `arena.deinit()` 放内层 `if`（出块即释放）→ 拷贝时读已 unmap 的页，**启动直接 `0xC0000005`**（窗口都建不出来）。触发条件挑：`external-controller` 写**具体主机**（非 `0.0.0.0` 通配）或 `secret` **非空**（只有这两种才指向 arena 里的字符串）。
 - **网卡计量（`traffic.zig`）用 zigwin32**（`win32.iphlpapi` / `network_management.ip_helper`），**不是**项目 `win32.zig`：`isRealNic` 排除回环 / TUN / 无 MAC 虚拟口，`isCandidate` 再排除 NDIS filter 镜像与虚拟适配器（否则同一物理网卡的 filter 绑定会让计数翻倍）。**`GetIfTable2` 返回的表必须 `FreeMibTable`**（漏释放每秒泄漏一份，长跑涨到 GB 级并拖垮 GUI）。网卡可在右键菜单 "Network Interface" 子菜单手动选择，接口索引存 `nic_ifindex`。
 - **置顶（topmost）语义**：建窗一次性给 `WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`，代码里**从不**清该样式位（`applyHover` 的 `SetWindowPos` 带 `SWP_NOZORDER`，`hwndInsertAfter` 被忽略）；Windows 在解锁 / 显示模式变更 / DWM 重建 Z-order / 另一个 topmost 程序退出后会把它摆到普通窗口之下，由 `topmostGuard` 巡检静默修回（`SWP_NOACTIVATE`，不抢焦点；命中 topmost 窗口则不争）。间隔 = conf `topmost_guard_ms`。
+- **全屏自动隐藏（`autohide_fullscreen`，默认开）**：前台窗口矩形覆盖整个主屏（四边盖过屏幕边缘，8px 容差；`GetForegroundWindow` + `GetWindowRect` + `GetSystemMetrics`，最小化不算）时，`POLL_TIMER` 里把窗口 `SW_HIDE` 并跳过重绘 / `topmostGuard` / `hoverCheck`——常驻 layered topmost 窗口会干扰全屏 DWM 合成路径，实测表现为全屏游戏卡顿；退出全屏 `SW_SHOWNA` 原位恢复（不抢焦点）。菜单打开期间（`g_menu_open`）不隐藏；采样（`g_meter.tick()`）照常，恢复即显示准确网速。菜单 "Auto Hide in Fullscreen" 开关只作用于本次运行，不落盘。⚠ **不要换成 shell 的用户通知状态 API**（`SHQuery…NotificationState`）：实测（2026-09-30，4K/250%）zen 浏览器仅最大化（rect 3872x2072，高比屏幕小 120px）就让 shell 持续返回“全屏中”状态，桌面上控件被无限隐藏（启动即藏、永不恢复）——窗口矩形是真凭实据，shell 状态是猜测。Chrome 系最大化 rect（四边各超 16px 但高度差 120px）不会误判；真 F11 全屏（rect 覆盖整屏）会命中。
 - **自签证书 pinning、IPv6 路由策略、节点 / provider 的历史结论与实测**：见根 `AGENTS.md`「已确立的关键决策」，本文不再重复。
 - **校验器只认真实标识符**（标识符 token 与字符串字面量里的词，如 conf 键 / 注册表值名）：注释里提到某个名字不算「存在」；噪声词（参数名、关键字、散文里的文件名）集中在 `app\tools\docsgen.zig` 的 `STOP` 数组。

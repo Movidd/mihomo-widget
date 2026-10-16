@@ -101,6 +101,7 @@ pub extern "advapi32" fn RegSetValueExW(key: usize, name: [*:0]const u16, res: u
 pub extern "advapi32" fn RegCloseKey(key: usize) u32;
 pub extern "advapi32" fn RegDeleteValueW(key: usize, name: [*:0]const u16) u32;
 pub extern "wininet" fn InternetSetOptionW(h: ?*anyopaque, opt: u32, buf: ?*const anyopaque, len: u32) BOOL;
+pub extern "shell32" fn IsUserAnAdmin() BOOL;
 pub extern "user32" fn TrackPopupMenu(menu: HMENU, flags: u32, x: i32, y: i32, reserved: i32, hwnd: HWND, rect: ?*const RECT) BOOL;
 pub extern "user32" fn DestroyMenu(menu: HMENU) BOOL;
 pub extern "user32" fn ClientToScreen(hwnd: HWND, pt: *POINT) BOOL;

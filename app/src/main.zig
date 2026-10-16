@@ -125,8 +125,8 @@ var g_self_abs_len: usize = 0;
 var g_yaml_abs: [512]u8 = undefined;
 var g_yaml_len: usize = 0;
 var g_core_spawned = false;
-
 var g_core_pid: u32 = 0;
+var g_is_admin: bool = false; // 启动时缓存 IsUserAnAdmin，菜单自启项据此提示（进程运行中不会掉权限）
 
 fn rgb(r: u8, g: u8, b: u8) u32 {
     return @as(u32, r) | (@as(u32, g) << 8) | (@as(u32, b) << 16);
@@ -974,10 +974,16 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
             flashMsg("Testing latency…");
         },
         FUNC_AUTOSTART => {
-            const want = !system_win.autoStartEnabled();
-            if (system_win.setAutoStart(g_self_abs[0..g_self_abs_len], want)) {
-                flashMsg(if (want) "Auto start enabled" else "Auto start disabled");
-            } else flashMsg("Auto start failed");
+            // 自启用计划任务（RL HIGHEST）：创建/删除任务本身需要管理员；非提权实例点开关只提示。
+            // Run 键那条老路已废弃——提权程序在登录时会被静默跳过，写了也不生效。
+            if (!g_is_admin) {
+                flashMsg("Auto start needs admin (run as admin)");
+            } else {
+                const want = !system_win.autoStartEnabled();
+                if (system_win.setAutoStart(g_self_abs[0..g_self_abs_len], want)) {
+                    flashMsg(if (want) "Auto start enabled" else "Auto start disabled");
+                } else flashMsg("Auto start failed");
+            }
             _ = win.InvalidateRect(hwnd, null, 0);
         },
         FUNC_UPDATE_CORE => {
@@ -1410,6 +1416,10 @@ pub fn main() void {
     _ = win.ShowWindow(g_ui.hwnd, SW_SHOW);
     // 启动时按 conf 恢复系统代理（只写注册表指向 mixed-port，无需核心在线）。
     if (g_cfg.sysproxy) system_win.setSysProxy(g_state.mixed_port, true);
+    // 自启已迁移到计划任务（HKCU Run 键在提权程序上登录时被静默跳过）；
+    // 一次性清掉旧 Run 键条目，避免残留。管理员态缓存一次供菜单用。
+    system_win.removeLegacyRunEntry();
+    g_is_admin = system_win.isAdmin();
     // first frame paints immediately ("waiting/starting core"); poll driven by timer
     g_job_ev = win.CreateEventW(null, 1, 0, null); // manual-reset, initially non-signaled
     if (std.Thread.spawn(.{}, workerMain, .{})) |t| {

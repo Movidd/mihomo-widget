@@ -451,6 +451,35 @@ pub fn spawnCmd(core_pid: *u32, app_ascii: []const u8, cmd_ascii: []const u8, lo
     return true;
 }
 
+/// Spawn a hidden console child (no log redirect), wait for it to exit
+/// (max_ms cap) and store its exit code. Used for short-lived tool invocations
+/// (schtasks autostart). Returns false if CreateProcess failed; on timeout the
+/// child is NOT killed, exit code is left untouched.
+pub fn spawnWaitHidden(app_ascii: []const u8, cmd_ascii: [:0]const u8, exit_code: *u32) bool {
+    var wide: [1200]u16 = undefined;
+    const n = asciiToWide(cmd_ascii, &wide);
+    if (n == 0 or n + 1 >= wide.len) return false;
+    wide[n] = 0;
+    var app_wide: [600]u16 = undefined;
+    const an = asciiToWide(app_ascii, &app_wide);
+    if (an == 0 or an + 1 >= app_wide.len) return false;
+    app_wide[an] = 0;
+    var si = std.mem.zeroes(win.STARTUPINFOW);
+    si.cb = @sizeOf(win.STARTUPINFOW);
+    si.dwFlags = 0x1; // STARTF_USESHOWWINDOW
+    si.wShowWindow = 0; // SW_HIDE
+    var pi: win.PROCESS_INFORMATION = undefined;
+    if (win.CreateProcessW(@ptrCast(&app_wide), @ptrCast(&wide), null, null, 0, CREATE_NO_WINDOW, null, null, &si, &pi) == 0) {
+        std.debug.print("spawnWait CreateProcess fail err=0x{x} EOL", .{win.GetLastError()});
+        return false;
+    }
+    defer _ = win.CloseHandle(@intCast(@intFromPtr(pi.hThread)));
+    defer _ = win.CloseHandle(@intCast(@intFromPtr(pi.hProcess)));
+    const wait = win.WaitForSingleObject(@intCast(@intFromPtr(pi.hProcess)), 2000);
+    if (wait != 0) return false; // timeout or wait error
+    return win.GetExitCodeProcess(@intCast(@intFromPtr(pi.hProcess)), exit_code) != 0;
+}
+
 /// Try to start the bundled mihomo core (hidden) if the controller is not up.
 pub fn spawnCoreIfNeeded(exe_dir: []const u8, yaml_abs: []const u8, core_spawned: *bool, core_pid: *u32) void {
     if (core_spawned.*) return;

@@ -14,11 +14,11 @@
 | --- | --- | --- |
 | `Config`（`struct`）+ `pub fn load(exe_dir)` | ~146–252 | 解析 `mihomo-widget.conf`；字段见 §3 |
 | `g_cfg` / `g_state` / `g_ui` / `g_poll` / `g_poll_lock` / `g_meter` / `g_job` / `g_busy` / `g_quitting` / `g_worker_thread` / `g_job_ev` / `g_core_spawned` / `g_core_pid` | 全局单例 | 配置 / 运行状态 / UI 缓存 / 后台轮询槽 + 锁 / 网卡计量 / 任务盒 + 忙标志 / 退出标志 / worker 句柄 / 事件 / 核心启动+pid |
-| `workerTun()` / `workerTunSet(want)` | ~522/536 | 切换 TUN / 强制目标状态；返回 `0=enabled,1=disabled,2=needs admin,3=failed` |
-| `enqueueJob(kind)` | ~466 | 提交后台任务（`JobKind` 全集：`latency/tun/stop/update_core/update_geo/heal`）；已在跑则忽略 |
-| `handleJobDone(kind, result)` | ~807 | 任务收尾：提示 / 关窗 |
-| `flashMsg(text)` | ~338 | 底部短暂提示（5 个 tick） |
-| `main()` | ~1300 | 入口：DPI → 定位 yaml → parse api_info → 建窗 → worker → 消息循环 |
+| `workerTun()` / `workerTunSet(want)` | ~523/537 | 切换 TUN / 强制目标状态；返回 `0=enabled,1=disabled,2=needs admin,3=failed` |
+| `enqueueJob(kind)` | ~467 | 提交后台任务（`JobKind` 全集：`latency/tun/stop/update_core/update_geo/heal`）；已在跑则忽略 |
+| `handleJobDone(kind, result)` | ~808 | 任务收尾：提示 / 关窗 |
+| `flashMsg(text)` | ~339 | 底部短暂提示（5 个 tick） |
+| `main()` | ~1310 | 入口：DPI → 定位 yaml → parse api_info → 建窗 → worker → 消息循环 |
 
 #### main.zig 内部可改锚点（Agent 高频改动点）
 > 只列**确切符号名** + 归属区域，行号近似、会漂移——改前用 grep 按符号名复核当前行。
@@ -65,17 +65,20 @@
 | `pathExists(p)` | ~397 | 判断文件存在 |
 | `asciiToWide(ascii, buf)` | ~404 | ASCII → UTF-16 |
 | `spawnCmd(core_pid, app, cmd, log)` | ~415 | 启动进程（`CREATE_NO_WINDOW`） |
-| `spawnCoreIfNeeded(exe_dir, yaml, spawned, pid)` | ~455 | 惰性启动 mihomo：核心查找顺序 = 仓库上溯 3 级的 `.tools\mihomo\mihomo.exe`（dev）→ `<exe_dir>\mihomo\mihomo.exe`（发布）→ `<exe_dir>\mihomo.exe`（旧平铺）；`-f <主配置>`（就是 `findYaml` 命中的那份，控件不改写它），**`-d` = 主配置所在目录**（`direct.yaml` / geodata / 核心自己写的运行文件都跟 `config.yaml` 同目录；指错目录时 mihomo 只在启动日志里记一条 provider 报错，规则集静默失效） |
-| `pathUp(p0, levels)` | ~513 | 目录上溯 N 级 |
+| `spawnCoreIfNeeded(exe_dir, yaml, spawned, pid)` | ~484 | 惰性启动 mihomo：核心查找顺序 = 仓库上溯 3 级的 `.tools\mihomo\mihomo.exe`（dev）→ `<exe_dir>\mihomo\mihomo.exe`（发布）→ `<exe_dir>\mihomo.exe`（旧平铺）；`-f <主配置>`（就是 `findYaml` 命中的那份，控件不改写它），**`-d` = 主配置所在目录**（`direct.yaml` / geodata / 核心自己写的运行文件都跟 `config.yaml` 同目录；指错目录时 mihomo 只在启动日志里记一条 provider 报错，规则集静默失效） |
+| `pathUp(p0, levels)` | ~542 | 目录上溯 N 级 |
 | `patchTunEnable(src, want, out)` | ~81 | 把顶层 `tun:` 块的 `enable` 标量强制成 `want`：已有键就原地换值（缩进 / 行尾注释 / CRLF 都保留，`enable :` 这种带空格的也认），缺键就在 `tun:` 行后插一行（用块内缩进）。没有 `tun:` 块、`tun:` 写成 flow map、或值本身是 flow 集合 → `null`（宁可退回用户那份配置，也不臆造 tun 段）。返回写进 `out` 的长度；无变化时与 `src` 逐字节相同（自愈据此确认核心那份配置的 `tun.enable` 已等于实时状态） |
+| `spawnWaitHidden(app_ascii, cmd_ascii, exit_code)` | ~458 | 启动隐藏控制台子进程并等它退出（2s 上限，超时不杀），把退出码写进 `exit_code`；`CreateProcessW` 失败 / 超时 / 等待失败返回 `false`。目前只供 schtasks 自启用 |
 
-### system_win.zig — 注册表（系统代理 / 自启，无需 controller）
+### system_win.zig — 注册表（系统代理）+ 计划任务（自启，无需 controller）
 | 符号 | 定位 | 说明 |
 | --- | --- | --- |
-| `sysProxyEnabled()` | ~14 | 读 `ProxyEnable` |
-| `setSysProxy(mixed_port, on)` | ~32 | 写 `ProxyEnable`/`ProxyServer` + `InternetSetOptionW` 刷新 |
-| `autoStartEnabled()` | ~64 | 读 `Run` 键 |
-| `setAutoStart(self_abs, on)` | ~80 | 写 / 删 `Run` 键 |
+| `sysProxyEnabled()` | ~17 | 读 `ProxyEnable` |
+| `setSysProxy(mixed_port, on)` | ~35 | 写 `ProxyEnable`/`ProxyServer` + `InternetSetOptionW` 刷新 |
+| `autoStartEnabled()` | ~67 | `schtasks /query` 查 `mihomo-widget-autostart` 任务（退出码 0 = 存在）；spawn 失败按不存在算 |
+| `setAutoStart(self_abs, on)` | ~72 | 开 = `schtasks /create /SC ONLOGON /RL HIGHEST /F`（`/TR` 为带引号的 exe 绝对路径，非 ASCII 折成 `?`）；关 = 任务不存在即幂等成功，存在才 `/delete /F`。用计划任务是因为提权 exe 挂 HKCU `Run` 键时登录启动会被静默跳过 |
+| `removeLegacyRunEntry` | ~101 | 一次性删旧 `Run` 键条目 `mihomo-widget`（迁移清理，错误忽略）；main 启动时调用 |
+| `isAdmin` | ~116 | `IsUserAnAdmin`；菜单自启项据此决定是操作还是提示需要管理员 |
 
 ### config.zig — mihomo yaml 轻解析
 | 符号 | 定位 | 说明 |

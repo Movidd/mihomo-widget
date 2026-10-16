@@ -453,16 +453,30 @@ pub fn spawnCmd(core_pid: *u32, app_ascii: []const u8, cmd_ascii: []const u8, lo
 
 /// Spawn a hidden console child (no log redirect), wait for it to exit
 /// (max_ms cap) and store its exit code. Used for short-lived tool invocations
-/// (schtasks autostart). Returns false if CreateProcess failed; on timeout the
-/// child is NOT killed, exit code is left untouched.
+/// (schtasks autostart). `app_ascii` may be a bare exe name — it is resolved
+/// against System32 (CreateProcessW does NOT search for lpApplicationName; a
+/// bare name would only resolve relative to the CWD, which for a double-clicked
+/// windowless process is the exe dir, not System32). Returns false if
+/// CreateProcess failed; on timeout the child is NOT killed, exit code is left
+/// untouched.
 pub fn spawnWaitHidden(app_ascii: []const u8, cmd_ascii: [:0]const u8, exit_code: *u32) bool {
     var wide: [1200]u16 = undefined;
     const n = asciiToWide(cmd_ascii, &wide);
     if (n == 0 or n + 1 >= wide.len) return false;
     wide[n] = 0;
     var app_wide: [600]u16 = undefined;
-    const an = asciiToWide(app_ascii, &app_wide);
-    if (an == 0 or an + 1 >= app_wide.len) return false;
+    var an: usize = 0;
+    // System32 prefix + '\' + given name (or just the name if caller passed a path)
+    if (std.mem.indexOfScalar(u8, app_ascii, '\\') == null) {
+        const sl = win.GetSystemDirectoryW(&app_wide, app_wide.len - 2);
+        if (sl == 0 or sl + 2 + app_ascii.len + 1 >= app_wide.len) return false;
+        an = @intCast(sl);
+        app_wide[an] = '\\';
+        an += 1;
+    }
+    const an2 = asciiToWide(app_ascii, app_wide[an..]);
+    if (an2 == 0 or an + an2 + 1 >= app_wide.len) return false;
+    an += an2;
     app_wide[an] = 0;
     var si = std.mem.zeroes(win.STARTUPINFOW);
     si.cb = @sizeOf(win.STARTUPINFOW);

@@ -978,11 +978,16 @@ fn menuForGroup(hwnd: win.HWND, at: win.POINT) void {
             // Run 键那条老路已废弃——提权程序在登录时会被静默跳过，写了也不生效。
             if (!g_is_admin) {
                 flashMsg("Auto start needs admin (run as admin)");
+                logWrite("autostart: not admin, no-op EOL", .{});
             } else {
                 const want = !system_win.autoStartEnabled();
                 if (system_win.setAutoStart(g_self_abs[0..g_self_abs_len], want)) {
                     flashMsg(if (want) "Auto start enabled" else "Auto start disabled");
-                } else flashMsg("Auto start failed");
+                    logWrite("autostart: {s} ok", .{if (want) "enable" else "disable"});
+                } else {
+                    flashMsg("Auto start failed");
+                    logWrite("autostart: {s} failed", .{if (want) "enable" else "disable"});
+                }
             }
             _ = win.InvalidateRect(hwnd, null, 0);
         },

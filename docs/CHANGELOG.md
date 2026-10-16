@@ -9,6 +9,7 @@
   - 创建/删除任务本身需要管理员：**非提权实例**点开关只提示 `Auto start needs admin`，不误报失败。控件的提权状态启动时判定一次（`IsUserAnAdmin`）。
   - 旧 `Run` 键条目在启动时一次性清理（避免与任务并存导致双开）。
   - 内部：`system_win.setAutoStart` / `autoStartEnabled` 改走 `schtasks.exe`（`proc.spawnWaitHidden` 等待退出码，2s 上限）；`removeLegacyRunEntry` / `isAdmin` 新增。
+  - **v0.2.9 当天修复**：初版 `spawnWaitHidden` 把裸 exe 名（`schtasks.exe`）传给 `CreateProcessW` 的应用名参数——该参数不走搜索路径、只按 CWD 解析，双击启动（CWD = exe 目录）时必失败，表现为点 Auto Start 报 `Auto start failed`。现在自动加 System32 绝对路径，并把开关结果写进日志（`autostart: enable/disable ok/failed`）。
 
 ## v0.2.8 (2026-09-30)
 - **新增「全屏让位」，修全屏游戏卡顿**：前台窗口覆盖整个屏幕（全屏游戏 / 演示模式）时，控件自动从置顶层降到普通窗口层（**不隐藏**，被全屏窗口自然盖住），退出全屏后在原位静默升回置顶（不抢焦点）。常驻的置顶分层窗口会干扰全屏下的 DWM 合成路径，实测表现为全屏游戏卡顿（退出控件即恢复正常）——现在游戏时控件被当作被遮挡窗口处理，不再干扰合成；桌面使用完全不受影响。判定基于前台窗口矩形与屏幕尺寸比对，每秒一次，成本可忽略。

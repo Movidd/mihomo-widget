@@ -127,6 +127,7 @@ pub extern "kernel32" fn OpenProcess(access: u32, inherit: BOOL, pid: u32) isize
 pub extern "kernel32" fn TerminateProcess(h: isize, code: u32) BOOL;
 pub extern "kernel32" fn GetExitCodeProcess(h: isize, code: *u32) BOOL;
 pub extern "kernel32" fn GetModuleFileNameW(mod: HINSTANCE, buf: [*]u16, size: u32) u32;
+pub extern "kernel32" fn GetSystemDirectoryW(buf: [*]u16, size: u32) u32;
 pub extern "kernel32" fn CreateFileW(path: [*:0]const u16, access: u32, share: u32, sec: ?*anyopaque, disp: u32, flags: u32, tmpl: ?*anyopaque) isize;
 pub extern "kernel32" fn ReadFile(h: isize, buf: [*]u8, to_read: u32, read: *u32, ov: ?*anyopaque) BOOL;
 pub extern "kernel32" fn WriteFile(h: isize, buf: [*]const u8, to_write: u32, written: *u32, ov: ?*anyopaque) BOOL;

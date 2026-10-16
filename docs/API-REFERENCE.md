@@ -77,8 +77,8 @@
 | `setSysProxy(mixed_port, on)` | ~35 | 写 `ProxyEnable`/`ProxyServer` + `InternetSetOptionW` 刷新 |
 | `autoStartEnabled()` | ~67 | `schtasks /query` 查 `mihomo-widget-autostart` 任务（退出码 0 = 存在）；spawn 失败按不存在算 |
 | `setAutoStart(self_abs, on)` | ~72 | 开 = `schtasks /create /SC ONLOGON /RL HIGHEST /F`（`/TR` 为带引号的 exe 绝对路径，非 ASCII 折成 `?`）；关 = 任务不存在即幂等成功，存在才 `/delete /F`。用计划任务是因为提权 exe 挂 HKCU `Run` 键时登录启动会被静默跳过 |
-| `removeLegacyRunEntry` | ~101 | 一次性删旧 `Run` 键条目 `mihomo-widget`（迁移清理，错误忽略）；main 启动时调用 |
-| `isAdmin` | ~116 | `IsUserAnAdmin`；菜单自启项据此决定是操作还是提示需要管理员 |
+| `removeLegacyRunEntry` | ~104 | 一次性删旧 `Run` 键条目 `mihomo-widget`（迁移清理，错误忽略）；main 启动时调用 |
+| `isAdmin` | ~119 | `IsUserAnAdmin`；菜单自启项据此决定是操作还是提示需要管理员 |
 
 ### config.zig — mihomo yaml 轻解析
 | 符号 | 定位 | 说明 |

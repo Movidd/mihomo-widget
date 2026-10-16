@@ -65,7 +65,7 @@ pub fn setSysProxy(mixed_port: u16, on: bool) void {
 }
 
 pub fn autoStartEnabled() bool {
-    if (!runSchtasksWait("query", "/TN \"" ++ TASK_NAME ++ "\"", null, "")) return false;
+    if (!runSchtasksWait("query", " /TN \"" ++ TASK_NAME ++ "\"", null, "")) return false;
     return lastSchtasksCode() == 0;
 }
 
@@ -73,7 +73,7 @@ pub fn setAutoStart(self_abs: []const u8, on: bool) bool {
     if (!on) {
         // absent task counts as success (idempotent disable)
         if (!autoStartEnabled()) return true;
-        _ = runSchtasksWait("delete", "/TN \"" ++ TASK_NAME ++ "\" /F", null, "");
+        _ = runSchtasksWait("delete", " /TN \"" ++ TASK_NAME ++ "\" /F", null, "");
         return lastSchtasksCode() == 0;
     }
     if (self_abs.len == 0) return false;
@@ -91,8 +91,11 @@ pub fn setAutoStart(self_abs: []const u8, on: bool) bool {
     tr[n] = '"';
     n += 1;
     tr[n] = 0;
-    // /F overwrites an existing task so re-enabling after a move works
-    return runSchtasksWait("create", "/TN \"" ++ TASK_NAME ++ "\" /TR ", tr[0..n :0], " /SC ONLOGON /RL HIGHEST /F");
+    // /F overwrites an existing task so re-enabling after a move works.
+    // The exit code IS the verdict: schtasks returns 1 on malformed args /
+    // access denied / nonexistent task — spawn success alone proves nothing.
+    if (!runSchtasksWait("create", " /TN \"" ++ TASK_NAME ++ "\" /TR ", tr[0..n :0], " /SC ONLOGON /RL HIGHEST /F")) return false;
+    return lastSchtasksCode() == 0;
 }
 
 /// One-shot migration: delete the legacy HKCU Run-key value (it is silently
@@ -126,8 +129,11 @@ fn lastSchtasksCode() u32 {
 }
 
 /// Run `schtasks <verb> <args...>` hidden and wait (2s cap, matching the
-/// widget's all-chains-2s timeout convention). `tr` is appended after
-/// `head_args`; `tail_args` after it. Returns false on spawn failure.
+/// widget's all-chains-2s timeout convention). `head_args` must begin with a
+/// space (verb and head_args are concatenated with no separator); `tr` is
+/// appended after `head_args`, `tail_args` after it. Returns spawn/wait
+/// success only — the schtasks exit code lands in g_sch_code and is the
+/// caller's verdict.
 fn runSchtasksWait(verb: []const u8, head_args: []const u8, tr: ?[]const u8, tail_args: []const u8) bool {
     var cmd: [1200]u8 = undefined;
     var n: usize = 0;

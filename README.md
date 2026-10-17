@@ -2,6 +2,8 @@
 
 Windows 桌面上的一块 **mihomo 悬浮控件**：常驻置顶的小面板，用 GDI 手绘、握手写的 Win32 互操作层——Zig 0.16 实现，不依赖 Electron / .NET / Qt。
 
+![screenshot](1.png)
+
 ## 它做什么
 
 - **实时网速**：只统计**物理网卡**的字节数（排除回环 / TUN / 无 MAC 的虚拟口，也排除 NDIS filter 镜像），自动换挡显示 KB/s 或 MB/s。
